@@ -60,11 +60,26 @@
           ></textarea>
         </div>
 
+        <!-- Progress bar -->
+        <div v-if="isUploading" class="mt-6">
+          <div class="flex justify-between text-sm text-gray-600 mb-1">
+            <span>Uploading...</span>
+            <span>{{ uploadProgress }}%</span>
+          </div>
+          <div class="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              class="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+              :style="{ width: `${uploadProgress}%` }"
+            ></div>
+          </div>
+        </div>
+
         <button
           @click="uploadFile"
-          class="w-full mt-6 bg-gray-600 text-white py-2.5 rounded-lg hover:bg-gray-700 transition text-sm font-medium"
+          :disabled="isUploading"
+          class="w-full mt-6 bg-gray-600 text-white py-2.5 rounded-lg hover:bg-gray-700 transition text-sm font-medium disabled:opacity-50"
         >
-          Upload File
+          {{ isUploading ? 'Uploading...' : 'Upload File' }}
         </button>
       </div>
 
@@ -107,10 +122,18 @@
 <script setup>
 import { ref } from 'vue'
 import { Copy, UploadCloud, X as XIcon } from 'lucide-vue-next'
+import { useSupabaseClient, useRouter } from '#imports'
+import { useFilesStore } from '~/stores/useFilesStore'
+
+const supabase = useSupabaseClient()
+const router = useRouter()
+const filesStore = useFilesStore()
 
 const fileInput = ref(null)
 const selectedFile = ref(null)
 const description = ref('')
+const isUploading = ref(false)
+const uploadProgress = ref(0)
 
 function triggerFileInput() {
   fileInput.value.click()
@@ -141,12 +164,70 @@ function formatFileSize(bytes) {
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
-function uploadFile() {
-  if (!selectedFile.value) {
-    alert('Please select a file to upload.')
+async function uploadFile() {
+  if (!selectedFile.value) return
+
+  // Check file size (100MB limit)
+  if (selectedFile.value.size > 100 * 1024 * 1024) {
+    alert('File size exceeds 100MB limit')
     return
   }
-  console.log('File:', selectedFile.value)
-  console.log('Description:', description.value)
+
+  isUploading.value = true
+  try {
+    const fileName = `${Date.now()}-${selectedFile.value.name}`
+    
+    // Upload to Supabase Storage
+    const { data, error } = await supabase.storage
+      .from('datainsight') // Changed from 'data-files' to 'datainsight'
+      .upload(fileName, selectedFile.value, {
+        onUploadProgress: (progress) => {
+          if (progress.total) {
+            uploadProgress.value = Math.round((progress.loaded / progress.total) * 100)
+          }
+        }
+      })
+
+    if (error) throw error
+
+    // Create file record in database
+    const { data: fileRecord, error: dbError } = await supabase
+      .from('files')
+      .insert({
+        name: selectedFile.value.name,
+        status: 'processing',
+        description: description.value,
+        file_path: fileName,
+        file_size: selectedFile.value.size,
+        created_at: new Date().toISOString()
+      })
+      .select()
+      .single()
+
+    if (dbError) throw dbError
+
+    // Add to store
+    await filesStore.addFile(fileRecord)
+
+    // Navigate to column mapping
+    await router.push(`/columnMapping/${fileRecord.id}`)
+  } catch (error) {
+    console.error('Upload error:', error)
+    alert('Error uploading file: ' + error.message)
+  } finally {
+    isUploading.value = false
+  }
 }
 </script>
+
+<!-- SQL Code to be run in Supabase SQL editor -->
+-- Create storage bucket if it doesn't exist
+insert into storage.buckets (id, name)
+values ('data-files', 'Data Files')
+on conflict do nothing;
+
+-- Set bucket policy
+create policy "Allow authenticated uploads"
+on storage.objects for insert
+to authenticated
+with check (bucket_id = 'data-files');
