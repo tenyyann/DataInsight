@@ -123,6 +123,7 @@
 import { ref, computed } from 'vue'
 import { Copy, FileText, AlertCircle } from 'lucide-vue-next'
 import { useToast } from 'vue-toastification'
+import { useRouter, useSupabaseClient } from '#imports'
 
 // File information
 const fileName = ref('sales_data_2024.xlsx')
@@ -209,20 +210,69 @@ function getConfidenceBadgeClass(confidence: number) {
 
 // Utilisation du toast
 const toast = useToast()
+const router = useRouter()
+const supabase = useSupabaseClient()
 
-function proceedToAnalysis() {
-  const mappedColumns = columns.value.filter(col => col.included && col.mappedField)
-  if (mappedColumns.length === 0) {
-    toast.error('No columns mapped\nPlease map at least one column to proceed with analysis.', {
-      timeout: 3000
+async function proceedToAnalysis() {
+  try {
+    const mappedColumns = columns.value.filter(col => col.included && col.mappedField)
+    
+    if (mappedColumns.length === 0) {
+      toast.error('No columns mapped\nPlease map at least one column to proceed with analysis.', {
+        timeout: 3000
+      })
+      return
+    }
+
+    // Sauvegarder le mapping dans Supabase
+    const { error: updateError } = await supabase
+      .from('files')
+      .update({
+        column_mapping: mappedColumns,
+        status: 'mapped'
+      })
+      .eq('id', route.params.id)
+
+    if (updateError) throw updateError
+
+    // Créer une entrée d'analyse initiale
+    const initialAnalysis = {
+      totalRecords: totalRows.value,
+      recordsChange: 0,
+      averageRevenue: 0,
+      revenueChange: 0,
+      completionRate: 0,
+      completionChange: 0,
+      qualityScore: 0,
+      qualityChange: 0,
+      validRecords: totalRows.value,
+      validPercentage: 100,
+      invalidRecords: 0,
+      invalidPercentage: 0,
+      duplicateRecords: 0,
+      duplicatePercentage: 0
+    }
+
+    // Créer ou mettre à jour l'entrée d'analyse
+    const { error: analysisError } = await supabase
+      .from('analysis_results')
+      .upsert({
+        file_id: route.params.id,
+        results: initialAnalysis
+      })
+
+    if (analysisError) throw analysisError
+
+    toast.success(`Column mapping saved!\n${mappedColumns.length} columns mapped successfully.`, {
+      timeout: 2000
     })
-    return
+
+    // Rediriger vers results avec l'ID du fichier
+    await router.push(`/results?fileId=${route.params.id}`)
+
+  } catch (error) {
+    console.error('Error in proceedToAnalysis:', error)
+    toast.error('Error saving column mapping: ' + error.message)
   }
-  // Afficher le message de succès
-  toast.success(`Column mapping saved!\n${mappedColumns.length} columns mapped successfully. Starting analysis...`, {
-    timeout: 3000
-  })
-  // Continue with analysis
-  console.log('Proceeding to analysis with mappings:', mappedColumns)
 }
 </script>

@@ -7,11 +7,17 @@
         <p class="text-gray-500 text-sm">Detailed insights from your data analysis</p>
       </div>
       <div class="flex gap-4">
-        <button class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+        <button 
+          @click="handleViewCharts"
+          class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50"
+        >
           <Clock class="w-4 h-4" />
           View Charts
         </button>
-        <button class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800">
+        <button 
+          @click="handleExport"
+          class="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gray-900 rounded-lg hover:bg-gray-800"
+        >
           <Download class="w-4 h-4" />
           Export Report
         </button>
@@ -25,8 +31,8 @@
           <h3 class="text-sm font-medium text-gray-500">Total Records</h3>
           <TrendingUp class="w-4 h-4 text-green-500" />
         </div>
-        <p class="text-2xl font-bold mb-2">1,250</p>
-        <p class="text-sm text-green-600">+12% from last analysis</p>
+        <p class="text-2xl font-bold mb-2">{{ analysisData.totalRecords }}</p>
+        <p class="text-sm text-green-600">+{{ analysisData.recordsChange }}% from last analysis</p>
       </div>
 
       <div class="bg-white p-6 rounded-lg border border-gray-200">
@@ -34,8 +40,8 @@
           <h3 class="text-sm font-medium text-gray-500">Average Revenue</h3>
           <TrendingUp class="w-4 h-4 text-green-500" />
         </div>
-        <p class="text-2xl font-bold mb-2">$4,250</p>
-        <p class="text-sm text-green-600">+8% from last analysis</p>
+        <p class="text-2xl font-bold mb-2">${{ analysisData.averageRevenue }}</p>
+        <p class="text-sm text-green-600">+{{ analysisData.revenueChange }}% from last analysis</p>
       </div>
 
       <div class="bg-white p-6 rounded-lg border border-gray-200">
@@ -43,8 +49,8 @@
           <h3 class="text-sm font-medium text-gray-500">Completion Rate</h3>
           <TrendingDown class="w-4 h-4 text-red-500" />
         </div>
-        <p class="text-2xl font-bold mb-2">94.5%</p>
-        <p class="text-sm text-red-600">-2% from last analysis</p>
+        <p class="text-2xl font-bold mb-2">{{ analysisData.completionRate }}%</p>
+        <p class="text-sm text-red-600">-{{ -analysisData.completionChange }}% from last analysis</p>
       </div>
 
       <div class="bg-white p-6 rounded-lg border border-gray-200">
@@ -52,8 +58,8 @@
           <h3 class="text-sm font-medium text-gray-500">Data Quality Score</h3>
           <TrendingUp class="w-4 h-4 text-green-500" />
         </div>
-        <p class="text-2xl font-bold mb-2">87/100</p>
-        <p class="text-sm text-green-600">+5% from last analysis</p>
+        <p class="text-2xl font-bold mb-2">{{ analysisData.qualityScore }}/100</p>
+        <p class="text-sm text-green-600">+{{ analysisData.qualityChange }}% from last analysis</p>
       </div>
     </div>
 
@@ -87,8 +93,13 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { Clock, Download, TrendingUp, TrendingDown } from 'lucide-vue-next'
+import { useRoute } from '#imports'
+import { useSupabaseClient } from '#imports'
+
+const route = useRoute()
+const supabase = useSupabaseClient()
 
 const activeTab = ref('overview')
 const tabs = [
@@ -97,4 +108,76 @@ const tabs = [
   { id: 'preview', name: 'Data Preview' },
   { id: 'alerts', name: 'Alerts' }
 ]
+
+// Analysis data state
+const analysisData = ref({
+  totalRecords: 0,
+  recordsChange: 0,
+  averageRevenue: 0,
+  revenueChange: 0,
+  completionRate: 0,
+  completionChange: 0,
+  qualityScore: 0,
+  qualityChange: 0,
+  validRecords: 0,
+  validPercentage: 0,
+  invalidRecords: 0,
+  invalidPercentage: 0,
+  duplicateRecords: 0,
+  duplicatePercentage: 0
+})
+
+// Fetch analysis data
+onMounted(async () => {
+  try {
+    const { data: fileData, error: fileError } = await supabase
+      .from('files')
+      .select('*')
+      .eq('id', route.query.fileId)
+      .single()
+
+    if (fileError) throw fileError
+
+    const { data: analysisResults, error: analysisError } = await supabase
+      .from('analysis_results')
+      .select('*')
+      .eq('file_id', route.query.fileId)
+      .single()
+
+    if (analysisError) throw analysisError
+
+    if (analysisResults) {
+      analysisData.value = {
+        totalRecords: fileData.total_rows || 1250,
+        recordsChange: 12,
+        averageRevenue: analysisResults.results?.averageRevenue || 4250,
+        revenueChange: 8,
+        completionRate: analysisResults.results?.completionRate || 94.5,
+        completionChange: -2,
+        qualityScore: analysisResults.results?.qualityScore || 87,
+        qualityChange: 5,
+        validRecords: analysisResults.results?.validRecords || 1182,
+        validPercentage: analysisResults.results?.validPercentage || 94.5,
+        invalidRecords: analysisResults.results?.invalidRecords || 68,
+        invalidPercentage: analysisResults.results?.invalidPercentage || 5.5,
+        duplicateRecords: analysisResults.results?.duplicateRecords || 15,
+        duplicatePercentage: analysisResults.results?.duplicatePercentage || 1.2
+      }
+    }
+  } catch (error) {
+    console.error('Error fetching analysis results:', error)
+  }
+})
+
+// Export report handler
+const handleExport = async () => {
+  // TODO: Implement export functionality
+  console.log('Exporting report...')
+}
+
+// View charts handler
+const handleViewCharts = () => {
+  // TODO: Implement charts view
+  console.log('Viewing charts...')
+}
 </script>

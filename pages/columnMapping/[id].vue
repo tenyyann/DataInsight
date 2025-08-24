@@ -190,20 +190,51 @@
             </button>
           </div>
         </div>
+
+        <!-- Warning Message -->
+        <div v-if="showNoMappingWarning" class="mt-4 p-4 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-700 text-sm rounded-lg" role="alert">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 inline-block mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          You have not mapped any columns. Proceeding without mapping may result in incomplete analysis.
+        </div>
+
+        <!-- No Mapping Warning Modal -->
+        <div v-if="showNoMappingWarning" 
+          class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full flex items-center justify-center"
+        >
+          <div class="relative bg-white rounded-lg p-8 max-w-md mx-auto">
+            <div class="text-center">
+              <h3 class="text-lg font-medium text-red-600 mb-4">No columns mapped</h3>
+              <p class="text-gray-500 mb-6">
+                Please map at least one column to proceed with analysis.
+              </p>
+              <button
+                @click="showNoMappingWarning = false"
+                class="px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700"
+              >
+                OK
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted } from 'vue'
-import { useRoute, useRouter } from '#imports'
-import { useSupabaseClient } from '#imports'
+<script setup lang="ts">
+import { ref, computed } from 'vue'
+import { Copy, FileText, AlertCircle } from 'lucide-vue-next'
+import { useToast } from 'vue-toastification'
+import { useRouter, useRoute, useSupabaseClient } from '#imports'
 import * as XLSX from 'xlsx'
 
+// Add missing route
 const route = useRoute()
 const router = useRouter()
 const supabase = useSupabaseClient()
+const toast = useToast()
 
 const fileInfo = ref({
   name: '',
@@ -215,6 +246,7 @@ const fileInfo = ref({
 
 // Add loading state
 const isLoading = ref(true)
+const showNoMappingWarning = ref(false)
 
 // Function to get confidence class
 function getConfidenceClass(confidence) {
@@ -350,16 +382,17 @@ async function readExcelFile(file) {
 // Handle proceed to analysis
 async function proceedToAnalysis() {
   try {
-    const mappedColumns = fileInfo.value.columns
-      .filter(col => col.included)
-      .map(col => ({
-        name: col.name,
-        mappedField: col.mappedField,
-        type: col.detectedType
-      }))
+    const mappedColumns = fileInfo.value.columns.filter(col => col.included && col.mappedField)
+    
+    if (mappedColumns.length === 0) {
+      toast.error('Please map at least one column to proceed with analysis.', {
+        timeout: 3000
+      })
+      return
+    }
 
-    // Save column mapping to database
-    const { error } = await supabase
+    // Update only the column_mapping and status
+    const { error: updateError } = await supabase
       .from('files')
       .update({
         column_mapping: mappedColumns,
@@ -367,13 +400,40 @@ async function proceedToAnalysis() {
       })
       .eq('id', route.params.id)
 
-    if (error) throw error
+    if (updateError) throw updateError
 
-    // Navigate to analysis page
-    router.push(`/analysis/${route.params.id}`)
+    // Create initial analysis entry
+    const { error: analysisError } = await supabase
+      .from('analysis_results')
+      .insert({
+        file_id: route.params.id,
+        results: {
+          totalRows: fileInfo.value.totalRows,
+          totalColumns: fileInfo.value.columns.length,
+          columnsMapped: mappedColumns.length,
+          columns: mappedColumns.map(col => ({
+            name: col.name,
+            type: col.detectedType,
+            mappedField: col.mappedField,
+            nullCount: 0,
+            uniqueCount: 0,
+            min: null,
+            max: null
+          })),
+          qualityScore: 0
+        }
+      })
+
+    if (analysisError) throw analysisError
+
+    toast.success('Column mapping saved successfully', { timeout: 2000 })
+    
+    // Redirect to results page
+    await router.push('/results')
+
   } catch (error) {
-    console.error('Error saving mapping:', error)
-    alert('Error saving column mapping')
+    console.error('Error in proceedToAnalysis:', error)
+    toast.error(`Error saving column mapping: ${error.message}`)
   }
 }
 
